@@ -104,7 +104,7 @@ class ExpandZergBot(BotAI):
     if unit.type_id == UnitTypeId.HATCHERY and self.mineral_field:
       mf = self.mineral_field.closest_to(unit)
       unit.smart(mf)
-class ZerlingBot(BaseZergBot):
+class ZerglingBot(BaseZergBot):
     def __init__(self):
         super(ZerlingBot, self).__init__()
     
