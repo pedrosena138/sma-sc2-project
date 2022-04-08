@@ -12,7 +12,9 @@ import random
 
 _MAX_DRONES: int = 22
 _MAX_BROODLORDS: int = 2
-_MAX_ZERGLINGS: int = 50
+_MAX_ZERGLINGS: int = 100
+
+_ARMY_UNITS: Set[UnitTypeId] = {UnitTypeId.ZERGLING}
 
 class BaseZergBot(BotAI):
     """
@@ -21,6 +23,12 @@ class BaseZergBot(BotAI):
     def __init__(self):
         super(BaseZergBot, self).__init__()
         self.race = Race.Zerg
+        self.headquarter: Unit = None
+        self.army = None
+    
+    async def on_start(self):
+        self.headquarter: Unit = self.townhalls.first
+        self.army: Units = self.units.of_type(_ARMY_UNITS)
 
     def select_target(self) -> Point2:
         """
@@ -39,20 +47,42 @@ class BaseZergBot(BotAI):
         drones_amount = self.supply_workers + self.already_pending(UnitTypeId.DRONE)
         return self.can_afford(UnitTypeId.DRONE) and drones_amount - self.worker_en_route_to_build(UnitTypeId.HATCHERY) < max_drones_amount
 
-    def build_queen(self, headquarter: Unit) -> None:
+    def build_queen(self) -> None:
         if self.structures(UnitTypeId.SPAWNINGPOOL).ready:
-            if not self.units(UnitTypeId.QUEEN) and headquarter.is_idle:
+            if not self.units(UnitTypeId.QUEEN) and self.headquarter.is_idle:
                 if self.can_afford(UnitTypeId.QUEEN):
-                    headquarter.train(UnitTypeId.QUEEN)
+                    self.headquarter.train(UnitTypeId.QUEEN)
+    
+    async def on_building_construction_complete(self, unit: Unit):
+        """ Set rally point of new hatcheries. """
+        if unit.type_id == UnitTypeId.HATCHERY and self.mineral_field:
+            mf = self.mineral_field.closest_to(unit)
+            unit.smart(mf)
 
     # Builds
-    async def build_spawning_pool(self, headquarter: Unit) -> None:
+    async def build_spawning_pool(self) -> None:
         """
         Build spawning pool
         """
         if self.structures(UnitTypeId.SPAWNINGPOOL).amount + self.already_pending(UnitTypeId.SPAWNINGPOOL) == 0:
             if self.can_afford(UnitTypeId.SPAWNINGPOOL):
-                await self.build(UnitTypeId.SPAWNINGPOOL, near=headquarter)
+                await self.build(UnitTypeId.SPAWNINGPOOL, near=self.headquarter)
+    
+    async def can_expand(self) -> None:
+        """
+        Check if can build another base
+        """
+        if self.can_afford(UnitTypeId.HATCHERY):
+            planned_hatch_locations: Set[Point2] = {placeholder.position for placeholder in self.placeholders}
+            my_structure_locations: Set[Point2] = {structure.position for structure in self.structures}
+            enemy_structure_locations: Set[Point2] = {structure.position for structure in self.enemy_structures}
+            blocked_locations: Set[Point2] = (
+                my_structure_locations | planned_hatch_locations | enemy_structure_locations
+            )
+
+            exp_pos = await self.get_next_expansion()
+            if exp_pos not in blocked_locations:
+                await self.expand_now(building=UnitTypeId.HATCHERY)
     
     def build_gas_buildings(self) -> None:
         """
@@ -64,8 +94,7 @@ class BaseZergBot(BotAI):
         if extractors_amount < max_extractors_amount:
             if self.can_afford(UnitTypeId.EXTRACTOR):
                 drone: Unit = self.workers.random
-                target: Unit = self.vespene_geyser.closest_to(drone.position)
-                drone.build_gas(target)
+                self.build(UnitTypeId.EXTRACTOR, drone)
         
         # Assign drones to extractors
         for extractor in self.gas_buildings:
@@ -74,111 +103,38 @@ class BaseZergBot(BotAI):
                 if workers:
                     workers.random.gather(extractor)
 
-    def can_expand(self) -> None:
-        """
-        Check if can build another base
-        """
-        if (self.townhalls.amount + self.placeholders(UnitTypeId.HATCHERY).amount) == 1 and not self.already_pending(UnitTypeId.HATCHERY):
-            if self.can_afford(UnitTypeId.HATCHERY):
-                planned_hatch_locations: Set[Point2] = {placeholder.position for placeholder in self.placeholders}
-                my_structure_locations: Set[Point2] = {structure.position for structure in self.structures}
-                enemy_structure_locations: Set[Point2] = {structure.position for structure in self.enemy_structures}
 
-                blocked_locations: Set[Point2] = (
-                    my_structure_locations | planned_hatch_locations | enemy_structure_locations
-                )
-
-                shuffled_expansions = self.expansion_locations_list.copy()
-                random.shuffle(shuffled_expansions)
-
-                drone: Unit = random.choice(self.workers)
-                for exp_pos in shuffled_expansions:
-                    if exp_pos not in blocked_locations: 
-                        drone.build(UnitTypeId.HATCHERY, exp_pos)
-
-
-class CollectBot(BaseZergBot):
-
+class CollectAndExpandBot(BaseZergBot):
     async def on_start(self):
+        super(CollectAndExpandBot, self).on_start()
         self.client.game_step = 50
         await self.client.debug_show_map()
 
     async def on_step(self, iteration: int):
-        self.can_expand()
+        if self.units(UnitTypeId.ZERGLING).amount >= _MAX_ZERGLINGS:
+            for unit in self.army:
+                unit.attack(self.select_target())
+
+        # Expand
+        await self.can_expand()
 
         # Train Overlords
         if self.supply_left < 2:
             if self.larva and self.can_afford(UnitTypeId.OVERLORD) and not self.already_pending(UnitTypeId.OVERLORD):
-                self.larva.random.train(UnitTypeId.OVERLORD)
+                self.train(UnitTypeId.OVERLORD)
                 return
         
         # Train Drones
         if self.larva and self.can_train_drones():
-            self.larva.random.train(UnitTypeId.DRONE)
+            self.train(UnitTypeId.DRONE)
             return
 
         await self.distribute_workers()
         
         self.build_gas_buildings()
-        
-        # Kill all enemy units in vision / sight
         if self.enemy_units:
-            await self.client.debug_kill_unit(self.enemy_units)
-            
+            await self.client.debug_kill_unit(self.enemy_units)       
 
-
-class ExpandZergBot(BotAI):
-  async def on_start(self):
-    self.client.game_step = 50
-    await self.client.debug_show_map()
-
-  async def on_step(self, iteration):
-    # Build overlords if about to be supply blocked
-    if (
-      self.supply_left < 2 and self.supply_cap < 200 and self.already_pending(UnitTypeId.OVERLORD) < 2
-      and self.can_afford(UnitTypeId.OVERLORD)
-    ):
-      self.train(UnitTypeId.OVERLORD)
-
-    # While we have less than 16 drones, make more drones
-    if (
-      self.can_afford(UnitTypeId.DRONE)
-      and self.supply_workers - self.worker_en_route_to_build(UnitTypeId.HATCHERY) <
-      (self.townhalls.amount + self.placeholders(UnitTypeId.HATCHERY).amount) * 16
-    ):
-      self.train(UnitTypeId.DRONE)
-
-    # Send workers across bases
-    await self.distribute_workers()
-
-    # Expand if we have 300 minerals, try to expand if there is one more expansion location available
-    with suppress(AssertionError):
-      if self.can_afford(UnitTypeId.HATCHERY):
-        planned_hatch_locations: Set[Point2] = {placeholder.position for placeholder in self.placeholders}
-        my_structure_locations: Set[Point2] = {structure.position for structure in self.structures}
-        enemy_structure_locations: Set[Point2] = {structure.position for structure in self.enemy_structures}
-        blocked_locations: Set[Point2] = (
-          my_structure_locations | planned_hatch_locations | enemy_structure_locations
-        )
-        shuffled_expansions = self.expansion_locations_list.copy()
-        random.shuffle(shuffled_expansions)
-        for exp_pos in shuffled_expansions:
-          if exp_pos in blocked_locations:
-            continue
-          for drone in self.workers.collecting:
-            drone: Unit
-            drone.build(UnitTypeId.HATCHERY, exp_pos)
-            assert False, f"Break out of 2 for loops"
-
-    # Kill all enemy units in vision / sight
-    if self.enemy_units:
-      await self.client.debug_kill_unit(self.enemy_units)
-
-  async def on_building_construction_complete(self, unit: Unit):
-    """ Set rally point of new hatcheries. """
-    if unit.type_id == UnitTypeId.HATCHERY and self.mineral_field:
-      mf = self.mineral_field.closest_to(unit)
-      unit.smart(mf)
 
 
 class ZerglingBot(BaseZergBot):
