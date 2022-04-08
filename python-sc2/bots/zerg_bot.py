@@ -63,6 +63,13 @@ class BaseZergBot(BotAI):
             mf = self.mineral_field.closest_to(unit)
             unit.smart(mf)
 
+    def get_drones(self) -> Units:
+        if self.workers:
+            drones = self.workers.filter(
+                lambda worker: not worker.is_carrying_resource and not worker.is_collecting
+            )
+            return drones
+        
     # Builds
     async def build_spawning_pool(self) -> None:
         """
@@ -96,10 +103,9 @@ class BaseZergBot(BotAI):
         extractors_amount = self.gas_buildings.amount + self.already_pending(UnitTypeId.EXTRACTOR)
         
         if extractors_amount < max_extractors_amount:
-            if self.can_afford(UnitTypeId.EXTRACTOR):
-                drone: Unit = self.workers.random
-                target: Unit = self.vespene_geyser.closest_to(drone.position)
-                drone.build_gas(target)
+            drone: Unit = self.workers.random
+            target: Unit = self.vespene_geyser.closest_to(drone.position)
+            drone.build_gas(target, can_afford_check=True)
 
 
 class CollectAndExpandBot(BaseZergBot):
@@ -222,11 +228,14 @@ class BroodlordBot(BaseZergBot):
         super(BroodlordBot, self).__init__()
 
     async def on_step(self, iteration):            
-        headquarter: Unit = self.townhalls.first
-        army: Units = self.units.of_type(_ARMY_UNITS)
+        self.headquarter: Unit = self.townhalls.first
+        self.army: Units = self.units.of_type(_ARMY_UNITS)
+
+        if self.headquarter and self.headquarter.surplus_harvesters > 0 and not self.already_pending(UnitTypeId.HATCHERY):
+            await self.can_expand()
 
         if self.units(UnitTypeId.BROODLORD).amount > _MAX_BROODLORDS_AMOUNT and iteration % 50 == 0:
-            for unit in army:
+            for unit in self.army:
                 unit.attack(self.select_target())
 
         # Train Overlord
@@ -248,34 +257,32 @@ class BroodlordBot(BaseZergBot):
         # Make idle queens inject
         for queen in self.units(UnitTypeId.QUEEN).idle:
             if queen.energy >= _QUEEN_ENERGY_AMOUNT:
-                queen(AbilityId.EFFECT_INJECTLARVA, headquarter)
+                queen(AbilityId.EFFECT_INJECTLARVA, self.headquarter)
 
         # Build pool
-        if self.structures(UnitTypeId.SPAWNINGPOOL).amount + self.already_pending(UnitTypeId.SPAWNINGPOOL) == 0:
-            if self.can_afford(UnitTypeId.SPAWNINGPOOL):
-                await self.build(UnitTypeId.SPAWNINGPOOL, near=headquarter)
+        await self.build_spawning_pool()
 
         # Upgrade to lair
         if self.structures(UnitTypeId.SPAWNINGPOOL).ready:
-            if not self.townhalls(UnitTypeId.LAIR) and not self.townhalls(UnitTypeId.HIVE) and headquarter.is_idle:
+            if not self.townhalls(UnitTypeId.LAIR) and not self.townhalls(UnitTypeId.HIVE) and self.headquarter.is_idle:
                 if self.can_afford(UnitTypeId.LAIR):
-                    headquarter.build(UnitTypeId.LAIR)
+                    self.headquarter.build(UnitTypeId.LAIR)
 
         # Build infestation pit
         if self.townhalls(UnitTypeId.LAIR).ready:
             if self.structures(UnitTypeId.INFESTATIONPIT).amount + self.already_pending(UnitTypeId.INFESTATIONPIT) == 0:
                 if self.can_afford(UnitTypeId.INFESTATIONPIT):
-                    await self.build(UnitTypeId.INFESTATIONPIT, near=headquarter)
+                    await self.build(UnitTypeId.INFESTATIONPIT, near=self.headquarter)
 
             # Build spire
             if self.structures(UnitTypeId.SPIRE).amount + self.already_pending(UnitTypeId.SPIRE) == 0:
                 if self.can_afford(UnitTypeId.SPIRE):
-                    await self.build(UnitTypeId.SPIRE, near=headquarter)
+                    await self.build(UnitTypeId.SPIRE, near=self.headquarter)
 
         # Upgrade to hive
-        if self.structures(UnitTypeId.INFESTATIONPIT).ready and not self.townhalls(UnitTypeId.HIVE) and headquarter.is_idle:
+        if self.structures(UnitTypeId.INFESTATIONPIT).ready and not self.townhalls(UnitTypeId.HIVE) and self.headquarter.is_idle:
             if self.can_afford(UnitTypeId.HIVE):
-                headquarter.build(UnitTypeId.HIVE)
+                self.headquarter.build(UnitTypeId.HIVE)
 
         # Upgrade to greater spire
         if self.townhalls(UnitTypeId.HIVE).ready:
@@ -290,11 +297,14 @@ class BroodlordBot(BaseZergBot):
 
         # Assign drones to extractors
         for extractor in self.gas_buildings:
-            if extractor.assigned_harvesters < extractor.ideal_harvesters:
-                workers: Units = self.workers
-                if workers:
-                    workers.random.gather(extractor)
+            if extractor.surplus_harvesters < 0:
+                drones: Units = self.get_drones().filter(
+                    lambda d: d.distance_to(extractor) < 8
+                )
+                if drones:
+                    drones.random.gather(extractor)
 
+        # TODO: distribute drones better
         await self.distribute_workers()
               
         # Build up to 22 drones
@@ -306,9 +316,9 @@ class BroodlordBot(BaseZergBot):
 
         # Build queen
         if self.structures(UnitTypeId.SPAWNINGPOOL).ready:
-            if not self.units(UnitTypeId.QUEEN) and headquarter.is_idle:
+            if not self.units(UnitTypeId.QUEEN) and self.headquarter.is_idle:
                 if self.can_afford(UnitTypeId.QUEEN):
-                    headquarter.train(UnitTypeId.QUEEN)
+                    self.headquarter.train(UnitTypeId.QUEEN)
 
         # Build zerglings if we have not enough gas to build corruptors and broodlords
         if self.units(UnitTypeId.ZERGLING).amount < _MAX_ZERGLINGS_AMOUNT and self.minerals > 1000:
