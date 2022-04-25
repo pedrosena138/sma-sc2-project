@@ -4,18 +4,19 @@ from sc2.constants import *
 from sc2.position import Point2
 from sc2.unit import Unit
 from sc2.units import Units
-from sc2.bot_ai import BotAI
 
 from sc2.ids.upgrade_id import UpgradeId
 from sc2.ids.unit_typeid import UnitTypeId
 
-from typing import Tuple, List
+from typing import List, Tuple
 from helpers.task import Task
 from events.trigger_event import TriggerEvent
 from events.passive_event import PassiveEvent
-from helpers.enum import States, EventTypes, TaskStatus
+from helpers.enum import EventTypes
+from .base_bot import BaseBot
 
 MAX_SCV_REPAIRING_PERCENTAGE = 0.2
+MAX_WORKERS: int = 65
 
 upgrade_ids = [
     UpgradeId.TERRANBUILDINGARMOR,
@@ -27,17 +28,44 @@ upgrade_ids = [
     UpgradeId.TERRANINFANTRYWEAPONSLEVEL3,
 ]
 
-class TerranBot(BotAI):
-    def __init__(self):
-        self.world = {  # Contains all the information available about the game world.
-            "locations": {},
-            "units": {},
+class TerranBot(BaseBot):
+
+    async def on_start(self):
+        self.army_units =  {
+            UnitTypeId.MARINE: [8, 3],
+            UnitTypeId.HELLION: [8, 3],
+            UnitTypeId.MARAUDER: [8,3],
+            UnitTypeId.SIEGETANK: [8,3]
         }
-        self.global_queue = [] 
-        self.global_events = {}
-        self.start()
-        self.MAX_WORKERS = 65
-        self.ITERATIONS_PER_MINUTE = 165
+         # Add global event to add engineeringbay logic to new engineeringbay.
+        def engineeringbay_task_adder_logic(bot: TerranBot, unit: Unit):
+            def engineeringbay_core_logic():
+                if (len(upgrade_ids) == 0):
+                    return
+
+                upgrade_id = upgrade_ids[0]
+                if self.research(upgrade_id):
+                    upgrade_ids.pop(0)
+
+            if unit.type_id == UnitTypeId.ENGINEERINGBAY:
+                self.add_unit_task(
+                    unit,
+                    Task(step=bot.factory(engineeringbay_core_logic)),
+                    TriggerEvent(lambda bot: self.structures.by_tag(unit.tag) and self.minerals > 100 and self.vespene > 100,
+                        constant=True,
+                    ),
+                )
+        
+        self.register_global_event(PassiveEvent(engineeringbay_task_adder_logic, EventTypes.NEW_UNIT, True))
+
+        if len(self.enemy_units) > 0:
+            return random.choice(self.enemy_units)
+
+        elif len(self.enemy_structures) > 0:
+            return random.choice(self.enemy_structures)
+
+        else: 
+            self.enemy_start_locations[0]
 
     async def on_step(self, iteration):
         self.iteration = iteration
@@ -54,7 +82,7 @@ class TerranBot(BotAI):
         await self.build_fusion_core()
         await self.train_BC()
         await self.BC_attack()
-        await self.army_atack()
+        await self.army_attack()
         await self.expand()
         await self.reactive_depot()
         await self.build_tech_lab_barrack()
@@ -77,7 +105,7 @@ class TerranBot(BotAI):
 
     async def build_workers(self):
         if len(self.townhalls(UnitTypeId.COMMANDCENTER))*16 > len(self.units(UnitTypeId.SCV)):
-            if len(self.units(UnitTypeId.SCV)) < self.MAX_WORKERS:
+            if len(self.units(UnitTypeId.SCV)) < MAX_WORKERS:
                 for cc in self.townhalls(UnitTypeId.COMMANDCENTER):
                     if self.can_afford(UnitTypeId.SCV) and cc.is_idle:
                         self.do(cc.train(UnitTypeId.SCV))
@@ -162,14 +190,6 @@ class TerranBot(BotAI):
 
             elif self.can_afford(UnitTypeId.SIEGETANK) and self.supply_army < 15 and not self.already_pending(UnitTypeId.SIEGETANK) and factory.has_add_on:
                 self.train(UnitTypeId.SIEGETANK, 1)
-            
-    async def expand(self):
-        if self.townhalls(UnitTypeId.COMMANDCENTER).amount < (self.iteration/self.ITERATIONS_PER_MINUTE)/5 and self.can_afford(UnitTypeId.COMMANDCENTER):
-            location = await self.get_next_expansion()
-            workers: Units = self.workers.gathering
-            if workers:  # if workers were found
-                worker: Unit = workers.random
-                self.do(worker.build(UnitTypeId.COMMANDCENTER, location))
 
     async def build_engineering_bay(self):
         ccs: Units = self.townhalls(UnitTypeId.COMMANDCENTER)
@@ -243,30 +263,6 @@ class TerranBot(BotAI):
                 ):
                     sp.build(UnitTypeId.STARPORTTECHLAB)
 
-    async def select_target(self) -> Tuple[Point2, bool]:
-        targets: Units = self.enemy_units
-        if targets:
-            return targets.random.position, True
-
-        """ Select an enemy target the units should attack. """
-        targets: Units = self.enemy_structures
-        if targets and len(self.units(UnitTypeId.BATTLECRUISER)) > 5 :
-            return targets.random.position, True
-
-        # if ( self.units and min([u.position.distance_to(self.enemy_start_locations[0])for u in self.units]) < 5) :
-            # return self.enemy_start_locations[0].position, False
-        if len(self.units(UnitTypeId.BATTLECRUISER)) > 5:
-            return self.enemy_start_locations[0].position, False
-
-        #retornar a posição de um cc randomico 
-        ccs: Units = self.townhalls(UnitTypeId.COMMANDCENTER)
-        if not ccs:
-            return
-        else:
-            cc: Unit = ccs.random
-
-        return cc.position, False
-
     async def BC_attack(self):
         bcs: Units = self.units(UnitTypeId.BATTLECRUISER)
         if bcs:
@@ -295,162 +291,8 @@ class TerranBot(BotAI):
                     depo(AbilityId.MORPH_SUPPLYDEPOT_RAISE)
                     break
 
-    def add_unit_task(
-        self,
-        unit: Unit,
-        task: Task,
-        trigger_event: TriggerEvent,
-        priority: int = 0,
-        tag: str = "",
-    ):
-        self.world["units"][unit]["task_queue"].append(
-            {
-                "priority": priority,
-                "task": task,
-                "trigger_event": trigger_event,
-                "tag": tag,
-                "time": self.time,
-            }
-        )
-
-    def register_global_event(self, event: PassiveEvent):
-        if event.event_type in self.global_events.keys():
-            self.global_events[event.event_type].append(event)
-        else:
-            self.global_events[event.event_type] = [event]
-
     def factory(self, func, *args):
         return lambda bot: func(*args)
-
-    def start(self):
-        
-        # Add global event to add engineeringbay logic to new engineeringbay.
-        def engineeringbay_task_adder_logic(bot: TerranBot, unit: Unit):
-            def engineeringbay_core_logic():
-                if (len(upgrade_ids) == 0):
-                    return
-
-                upgrade_id = upgrade_ids[0]
-                if self.research(upgrade_id):
-                    upgrade_ids.pop(0)
-
-            if unit.type_id == UnitTypeId.ENGINEERINGBAY:
-                self.add_unit_task(
-                    unit,
-                    Task(step=bot.factory(engineeringbay_core_logic)),
-                    TriggerEvent(lambda bot: self.structures.by_tag(unit.tag) and self.minerals > 100 and self.vespene > 100,
-                        constant=True,
-                    ),
-                )
-        
-
-        self.register_global_event(PassiveEvent(engineeringbay_task_adder_logic, EventTypes.NEW_UNIT, True))
-
-    def detect_changes(self):
-        # --- Check all units ---
-        # Extract the ids from the list of units and make them sets.
-        units_by_id = {unit.tag: unit for unit in self.units + self.structures}
-        units_ids = set(units_by_id.keys())
-        world_units_ids = set([unit.tag for unit in self.world["units"].keys()])  # TODO: Add caching to reduce workload.
-
-        # Calculate the difference and the intersection between the sets.
-        new_ids = units_ids.difference(world_units_ids)
-        removed_ids = world_units_ids.difference(units_ids)
-        comm_ids = units_ids.intersection(world_units_ids)
-
-        # Add the new unit.
-        for unit_id in new_ids:
-            self.world["units"][units_by_id[unit_id]] = {
-                "state": States.IDLE,
-                "task_queue": [],
-                "display_state": "",
-                "target_location": None,
-                "target_type": None
-            }
-            self.trigger_global_event(EventTypes.NEW_UNIT, units_by_id[unit_id])
-
-        # Remove the missing unit.
-        for unit_id in removed_ids:
-            # Trigger global event for removed unit and pop the unit from the registry.
-            # self.trigger_global_event(EventTypes.REMOVED_UNIT, self.world["units"].pop(units_by_id[unit_id]))  # TODO: Why does this crash?
-            pass
-
-        # Check if states are correct.
-        for unit_id in comm_ids:
-            # TODO: Add check for if the state is correct.
-            unit = units_by_id[unit_id]
-
-            # Check if workers are done building. # TODO: Think this is the root of a problem
-            """  
-            if self.get_unit_state(unit) == States.WORKER_BUILDING and unit.is_idle:
-                self.set_unit_state(unit, States.IDLE)
-            """
-        # --- Check all locations ---
-
-    def trigger_global_event(self, event_type, *args):
-        """
-        Used to trigger all events in the global event dictionary of a specified type.
-        :param event_type:
-        :param args:
-        :return:
-        """
-        if event_type in self.global_events.keys():
-            for event in self.global_events[event_type]:
-                event.trigger_event(self, *args)
-
-    def exec_global_tasks(self):
-        self.global_queue.sort(key=lambda i: i["priority"], reverse=True)
-
-        for i, item in enumerate(self.global_queue[:]):
-            if item["trigger_event"].should_trigger(self):
-                item["task"].on_step(self)
-                status = item["task"].get_status(self)
-                if (not item["trigger_event"].constant) or (status != Task.STATUS.RUNNING):
-                    self.global_queue.pop(self.global_queue.index(item))["task"].on_end(self, status)
-
-    def exec_all_units_tasks(self):
-        for unit in self.units + self.structures:
-            if self.world["units"][unit]["task_queue"]:
-                item = self.world["units"][unit]["task_queue"][0]
-                self.world["units"][unit]["task_queue"].sort(
-                    key=lambda i: i["priority"], reverse=True
-                )
-
-                if item["trigger_event"].should_trigger(self):
-                    item["task"].on_step(self)
-                    status = item["task"].get_status(self)
-                    if (not item["trigger_event"].constant) or (
-                        status != TaskStatus.RUNNING
-                    ):
-                        self.world["units"][unit]["task_queue"].pop(0)["task"].on_end(
-                            self, status
-                        )
-
-    def select_army_target(self,state):
-        if len(self.enemy_units) > 0:
-            return random.choice(self.enemy_units)
-
-        elif len(self.enemy_structures) > 0:
-            return random.choice(self.enemy_structures)
-
-        else: 
-            self.enemy_start_locations[0]
-
-    async def army_atack(self):
-        aggressive_units = {UnitTypeId.MARINE: [8, 3],
-                            UnitTypeId.HELLION: [8, 3],
-                            UnitTypeId.MARAUDER: [8,3],
-                            UnitTypeId.SIEGETANK: [8,3]}
-
-        for UNIT in aggressive_units:
-            if self.units(UNIT).amount > aggressive_units[UNIT][0] and self.units(UNIT).amount > aggressive_units[UNIT][1] and self.units(UNIT).amount > aggressive_units[UNIT][2] and self.units(UNIT).amount > aggressive_units[UNIT][3]:
-                for s in self.units(UNIT).idle:
-                    self.do(s.attack(self.select_army_target(self.state)))
-
-            elif self.units(UNIT).amount > aggressive_units[UNIT][1]:
-                if len(self.enemy_units) > 0:
-                    for s in self.units(UNIT).idle:
-                        self.do(s.attack(random.choice(self.enemy_units)))
 
     async def on_unit_took_damage(self, unit: Unit, amount_damage_taken):
         scvs = self.units(UnitTypeId.SCV)
@@ -480,6 +322,30 @@ class TerranBot(BotAI):
                     for addon_point in addon_points
                 ):
                     barrack.build(UnitTypeId.BARRACKSTECHLAB)
+
+    async def select_target(self) -> Tuple[Point2, bool]:
+        targets: Units = self.enemy_units
+        if targets:
+            return targets.random.position, True
+
+        """ Select an enemy target the units should attack. """
+        targets: Units = self.enemy_structures
+        if targets and len(self.units(UnitTypeId.BATTLECRUISER)) > 5 :
+            return targets.random.position, True
+
+        # if ( self.units and min([u.position.distance_to(self.enemy_start_locations[0])for u in self.units]) < 5) :
+            # return self.enemy_start_locations[0].position, False
+        if len(self.units(UnitTypeId.BATTLECRUISER)) > 5:
+            return self.enemy_start_locations[0].position, False
+
+        #retornar a posição de um cc randomico 
+        ccs: Units = self.townhalls(UnitTypeId.COMMANDCENTER)
+        if not ccs:
+            return
+        else:
+            cc: Unit = ccs.random
+
+        return cc.position, False
 
     async def build_tech_lab_factory(self):
         for factory in self.structures(UnitTypeId.FACTORY).ready.idle:
