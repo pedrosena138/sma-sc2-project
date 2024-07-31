@@ -1,9 +1,8 @@
 from .enum import TaskStatus
 
-class Task(object):
 
-    def __init__(self, start = None, step = None,
-                end = None, get_status = None):
+class Task:
+    def __init__(self, start=None, step=None, end=None, get_status=None):
         """
         Task class used for all game controls, added to a queue to take effect.
         :param start: Called once the first tick its added.
