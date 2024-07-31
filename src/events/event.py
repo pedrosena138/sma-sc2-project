@@ -1,20 +1,26 @@
 from helpers.enum import EventTypes
 
-class Event(object):
+
+class Event:
     """
     Not meant to be used by itself.
     Trigger event or Passive event should be used instead.
     """
 
-    def __init__(self, on_event = None, get_status = None,
-                event_type: EventTypes = EventTypes.EMPTY, constant: bool = False, toggle: bool = False):
+    def __init__(
+        self,
+        on_event=None,
+        get_status=None,
+        event_type: EventTypes = EventTypes.EMPTY,
+        constant: bool = False,
+        toggle: bool = False,
+    ):
         self.__on_event = on_event
         self.__get_status = get_status
         self.event_type = event_type
         self.constant = constant
         self.toggle = toggle
         self.__has_toggled = False
-        
 
     def trigger_event(self, bot, *args):
         """
@@ -36,4 +42,3 @@ class Event(object):
                 return True
             return False
         return True
-
