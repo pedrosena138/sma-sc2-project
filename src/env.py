@@ -1,5 +1,7 @@
 from enum import IntEnum
 
+from sc2 import maps
+
 
 class EventTypes(IntEnum):
     EMPTY = 0
@@ -22,3 +24,6 @@ class States(IntEnum):
     WORKER_MINERALS = 3
     WORKER_GAS = 4
     ARMY_DEFENDING = 5
+
+
+_MAP = maps.get("AcropolisLE")

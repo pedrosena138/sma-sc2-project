@@ -1,4 +1,4 @@
-from helpers.enum import EventTypes
+from src.env import EventTypes
 
 
 class Event:

@@ -1,11 +1,9 @@
-from sc2 import maps
 from sc2.bot_ai import BotAI
 from sc2.data import Race
 from sc2.main import run_game
 from sc2.player import Bot, Computer
 
-# The map always will be AcropolisLE
-_MAP = maps.get("AcropolisLE")
+from src.env import _MAP
 
 
 class WorkerRushBot(BotAI):

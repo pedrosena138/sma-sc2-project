@@ -1,4 +1,4 @@
-from .enum import TaskStatus
+from src.env import TaskStatus
 
 
 class Task:
