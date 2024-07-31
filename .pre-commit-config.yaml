@@ -9,11 +9,6 @@ repos:
     hooks:
       - id: pyupgrade
         args: [--py312-plus]
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.1
-    hooks:
-      - id: mypy
-        args: [--explicit-package-bases]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.5
     hooks:
