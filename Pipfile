@@ -1,0 +1,25 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+burnysc2 = "*"
+
+[dev-packages]
+isort = "*"
+pytest = "*"
+mypy = "*"
+pylint = "*"
+ruff = "*"
+pre-commit = "*"
+pyupgrade = "*"
+bandit = "*"
+
+[scripts]
+lint = "ruff check --fix"
+test = "pytest -v"
+start = "py src/main.py"
+
+[requires]
+python_version = "3.12"
