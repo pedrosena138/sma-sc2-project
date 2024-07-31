@@ -27,3 +27,5 @@ class States(IntEnum):
 
 
 _MAP = maps.get("AcropolisLE")
+
+__all__ = ["_MAP", "EventTypes", "TaskStatus", "States"]
