@@ -1,2 +1,2 @@
 # sma-sc2-project
-SMA Starcraft 2 Project
+Smart Multi-Agent Starcraft 2 Project
